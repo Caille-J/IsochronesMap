@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Isochrones — Où puis-je aller en 10 minutes ?</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  #map { height: 100%; }
+  .panel {
+    position: absolute; top: 12px; left: 12px; z-index: 1000;
+    background: rgba(255,255,255,0.95); border-radius: 14px;
+    padding: 14px 16px; box-shadow: 0 4px 18px rgba(0,0,0,0.18);
+    max-width: 300px; font-size: 14px; color: #1f2937;
+  }
+  .panel h1 { font-size: 16px; margin: 0 0 6px; }
+  .panel p { margin: 0 0 10px; color: #6b7280; line-height: 1.35; }
+  .legend { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .legend-item.show-first { font-weight: 600; }
+  .swatch { width: 18px; height: 13px; border-radius: 3px; flex: none; }
+  .swatch.walk { background: rgba(34,197,94,0.55); border: 2px solid #16a34a; }
+  .swatch.bike { background: rgba(59,130,246,0.55); border: 2px solid #2563eb; }
+  .swatch.car { background: rgba(239,68,68,0.55); border: 2px solid #dc2626; }
+  .row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .row label { font-size: 13px; color: #374151; }
+  select, input[type=range] { accent-color: #2563eb; }
+  #status { margin-top: 10px; font-size: 12.5px; color: #6b7280; min-height: 16px; }
+  #status.error { color: #b91c1c; }
+  .spinner {
+    display: inline-block; width: 12px; height: 12px; vertical-align: -2px;
+    border: 2px solid #d1d5db; border-top-color: #2563eb; border-radius: 50%;
+    animation: spin 0.8s linear infinite; margin-right: 5px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .mode-order { font-size: 12px; color: #9ca3af; margin-top: 8px; line-height: 1.4; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="panel">
+  <h1>🗺️ Où puis-je aller en 10 minutes ?</h1>
+  <p>Cliquez n'importe où sur la carte : l'appli calcule et affiche les zones atteignables à pied, à vélo et en voiture.</p>
+  <div class="row">
+    <label for="minutes">Durée :</label>
+    <select id="minutes">
+      <option value="5">5 min</option>
+      <option value="10" selected>10 min</option>
+      <option value="15">15 min</option>
+      <option value="20">20 min</option>
+    </select>
+  </div>
+  <div class="legend">
+    <div class="legend-item show-first"><span class="swatch walk"></span> À pied (au-dessus)</div>
+    <div class="legend-item"><span class="swatch bike"></span> À vélo (2ᵉ couche)</div>
+    <div class="legend-item"><span class="swatch car"></span> En voiture (3ᵉ couche)</div>
+  </div>
+  <div class="mode-order">Les zones se superposent : la zone à pied est prioritaire à l'affichage, puis le vélo, puis la voiture.</div>
+  <div id="status"></div>
+  <button id="run-tests" style="margin-top:10px;width:100%;padding:8px 10px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-size:13px;cursor:pointer;">🧪 Tester les services</button>
+  <div id="test-results" style="margin-top:8px;font-size:12px;line-height:1.5;color:#374151;"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+"use strict";
+
+// ------------------------------------------------------------------
+// Configuration des modes : couleur et paramètre "costing" Valhalla
+// ------------------------------------------------------------------
+const MODES = [
+  { id: "car",  label: "voiture", costing: "auto",       color: "#dc2626", fill: "rgba(239,68,68,0.30)", speedKmh: 30 },
+  { id: "bike", label: "vélo",    costing: "bicycle",    color: "#2563eb", fill: "rgba(59,130,246,0.35)", speedKmh: 15 },
+  { id: "walk", label: "à pied",  costing: "pedestrian", color: "#16a34a", fill: "rgba(34,197,94,0.40)", speedKmh: 4.8 }
+];
+// Ordre d'ajout = ordre d'empilement : voiture d'abord (en dessous),
+// puis vélo, puis à pied (au-dessus). Les couches se superposent.
+
+// ------------------------------------------------------------------
+// Carte Leaflet
+// ------------------------------------------------------------------
+const map = L.map("map", { zoomControl: true }).setView([48.8566, 2.3522], 13);
+// Fond de carte : ESRI (sans clé, accès libre), puis OSM Allemagne en secours.
+// Carto et OSM France retirés : ils peuvent exiger une clé API.
+const BASEMAPS = [
+  { url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+    attribution: "Tuiles &copy; Esri &mdash; Sources : Esri, HERE, Garmin, OpenStreetMap" },
+  { url: "https://{s}.tile.openstreetmap.de/{z}/{x}/{y}.png",
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' },
+  { url: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>' }
+];
+
+let baseLayer = null;
+let baseIdx = 0;
+function setBasemap(idx) {
+  if (baseLayer) map.removeLayer(baseLayer);
+  const b = BASEMAPS[idx % BASEMAPS.length];
+  baseLayer = L.tileLayer(b.url, { maxZoom: 19, attribution: b.attribution });
+  baseLayer.addTo(map);
+}
+setBasemap(baseIdx);
+
+// ------------------------------------------------------------------
+// TESTS INTÉGRÉS 🧪
+// Vérifie chaque dépendance externe directement depuis le navigateur,
+// puis choisit automatiquement le premier fournisseur qui fonctionne.
+// ------------------------------------------------------------------
+
+// Test 1 : un fournisseur de fond de carte répond-il ?
+// On charge une vraie tuile (image) et on attend le résultat.
+function testTile(provider) {
+  return new Promise(function (resolve) {
+    // Tuile réelle de Paris (zoom 13) : x=3309, y=2237
+    const url = provider.url
+      .replace("{s}", "a")
+      .replace("{z}", "13").replace("{x}", "3309")
+      .replace("{y}", "2237").replace("{r}", "");
+    const img = new Image();
+    const timeout = setTimeout(function () { resolve(false); }, 8000);
+    img.onload = function () { clearTimeout(timeout); resolve(true); };
+    img.onerror = function () { clearTimeout(timeout); resolve(false); };
+    img.src = url;
+  });
+}
+
+// Test 2 : l'API d'isochrones répond-elle pour ce mode ?
+async function testValhalla(costing) {
+  const body = {
+    locations: [{ lat: 48.8566, lon: 2.3522, type: "break" }],
+    costing: costing,
+    contours: [{ time: 10 }],
+    polygons: true
+  };
+  for (const host of VALHALLA_HOSTS) {
+    try {
+      const res = await fetch(host + "/isochrone?json=" + encodeURIComponent(JSON.stringify(body)));
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data.features && data.features.length) return true;
+    } catch (e) { /* serveur suivant */ }
+  }
+  return false;
+}
+
+const testResultsEl = document.getElementById("test-results");
+
+// Affiche un résultat de test sous forme ✔️ / ✖️
+function renderResult(label, ok, extra) {
+  const line = document.createElement("div");
+  line.innerHTML = (ok ? "✅ " : "✖️ ") + label + (extra ? " <span style='color:#9ca3af'>(" + extra + ")</span>" : "");
+  line.style.color = ok ? "#166534" : "#b91c1c";
+  testResultsEl.appendChild(line);
+}
+
+async function runSelfTests() {
+  testResultsEl.innerHTML = '<span class="spinner"></span>Tests en cours…';
+
+  // Test des 3 fournisseurs de fond de carte
+  const tileOk = [];
+  for (let i = 0; i < BASEMAPS.length; i++) {
+    const ok = await testTile(BASEMAPS[i]);
+    tileOk.push(ok);
+    renderResult("Fond de carte " + (i + 1) + "/" + BASEMAPS.length + " : " +
+      ["ESRI", "OSM Allemagne", "Carto"][i], ok, ok ? "image reçue" : "injoignable ou clé exigée");
+  }
+
+  // Test de l'API isochrone pour les 3 modes
+  const valhallaTests = await Promise.all([
+    testValhalla("pedestrian"), testValhalla("bicycle"), testValhalla("auto")
+  ]);
+  const modeNames = ["à pied", "à vélo", "en voiture"];
+  valhallaTests.forEach(function (ok, i) {
+    renderResult("Zone " + modeNames[i] + " : API Valhalla", ok, ok ? "polygone reçu" : "échec");
+  });
+
+  // On active le premier fond de carte qui fonctionne
+  const firstOk = tileOk.indexOf(true);
+  if (firstOk !== -1) {
+    baseIdx = firstOk;
+    setBasemap(baseIdx);
+    renderResult("Fond de carte actif : " + (["ESRI", "OSM Allemagne", "Carto"][firstOk]) + " — choisi automatiquement", true);
+  } else {
+    renderResult("Aucun fond de carte accessible — vérifie ta connexion internet", false);
+  }
+}
+
+// Lancement automatique des tests 1 seconde après l'ouverture,
+// pour choisir le bon fond de carte sans action de l'utilisateur.
+setTimeout(runSelfTests, 1000);
+document.getElementById("run-tests").addEventListener("click", runSelfTests);
+
+let marker = null;
+const layers = {};   // id -> couche Leaflet
+let lastPoint = null;
+
+const statusEl = document.getElementById("status");
+function setStatus(html, isError) {
+  statusEl.innerHTML = html;
+  statusEl.className = isError ? "error" : "";
+}
+
+// ------------------------------------------------------------------
+// Appel à l'API publique Valhalla (FOSSGIS) — isochrones réels.
+// En cas d'échec : cercle approximatif calculé avec une vitesse moyenne.
+// ------------------------------------------------------------------
+const VALHALLA_HOSTS = [
+  "https://valhalla1.openstreetmap.de",
+  "https://valhalla.openstreetmap.de"
+];
+
+async function fetchIsochrone(lat, lon, mode, minutes) {
+  const body = {
+    locations: [{ lat: lat, lon: lon, type: "break" }],
+    costing: mode.costing,
+    contours: [{ time: minutes }],
+    polygons: true,
+    generalize: 60,
+    denoise: 0.4
+  };
+  // On essaie chaque serveur, en GET (plus compatible navigateur que POST).
+  for (const host of VALHALLA_HOSTS) {
+    try {
+      const res = await fetch(host + "/isochrone?json=" + encodeURIComponent(JSON.stringify(body)));
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data.features && data.features.length) {
+        return { type: "FeatureCollection", features: data.features, approx: false };
+      }
+    } catch (e) { /* on essaie le serveur suivant */ }
+  }
+  // Aucun serveur n'a répondu : cercle approximatif (vitesse moyenne du mode)
+  const radiusKm = (mode.speedKmh * minutes) / 60;
+  return { circleKm: radiusKm, approx: true };
+}
+
+// Cercle approximatif en secours (dessine un cercle en mètres)
+function fallbackCircle(lat, lon, radiusKm, mode) {
+  return L.circle([lat, lon], {
+    radius: radiusKm * 1000,
+    color: mode.color,
+    weight: 2,
+    fillColor: mode.color,
+    fillOpacity: 0.25,
+    dashArray: "6 6"
+  });
+}
+
+function clearLayers() {
+  Object.values(layers).forEach(function (l) { map.removeLayer(l); });
+  for (const k in layers) delete layers[k];
+}
+
+async function showIsochrones(lat, lon) {
+  const minutes = parseInt(document.getElementById("minutes").value, 10);
+  clearLayers();
+
+  if (marker) map.removeLayer(marker);
+  marker = L.marker([lat, lon]).addTo(map)
+    .bindPopup("Point choisi<br>" + lat.toFixed(5) + ", " + lon.toFixed(5)).openPopup();
+
+  setStatus('<span class="spinner"></span>Calcul des zones en cours…');
+  const t0 = Date.now();
+
+  // Les 3 requêtes partent en parallèle
+  const results = await Promise.all(
+    MODES.map(function (m) { return fetchIsochrone(lat, lon, m, minutes); })
+  );
+
+  let anyApprox = false;
+  MODES.forEach(function (mode, i) {
+    const r = results[i];
+    let layer;
+    if (r.type === "FeatureCollection") {
+      layer = L.geoJSON(r, {
+        style: { color: mode.color, weight: 2.5, fillColor: mode.color, fillOpacity: 0.30 }
+      });
+    } else {
+      anyApprox = true;
+      layer = fallbackCircle(lat, lon, r.circleKm, mode);
+    }
+    layers[mode.id] = layer.addTo(map); // voiture ajoutée 1re => dessous
+  });
+
+  const okCount = results.filter(function (r) { return !r.approx; }).length;
+  const secs = ((Date.now() - t0) / 1000).toFixed(1);
+  if (anyApprox) {
+    setStatus('⚠️ ' + okCount + '/3 zones réelles. Les zones en pointillés sont des <b>estimations</b> (le service de routage était injoignable).', okCount === 0);
+  } else {
+    setStatus('✅ 3 zones calculées en ' + secs + ' s — cliquez ailleurs pour recalculer.');
+  }
+
+  // Zoome sur l'ensemble des zones
+  try {
+    const group = [];
+    Object.values(layers).forEach(function (l) { group.push(l); });
+    if (group.length) map.fitBounds(L.featureGroup(group).getBounds().pad(0.15));
+  } catch (e) { /* pas de frontières disponibles */ }
+}
+
+map.on("click", function (e) {
+  lastPoint = e.latlng;
+  showIsochrones(e.latlng.lat, e.latlng.lng);
+});
+
+document.getElementById("minutes").addEventListener("change", function () {
+  if (lastPoint) showIsochrones(lastPoint.lat, lastPoint.lng);
+});
+</script>
+</body>
+</html>
