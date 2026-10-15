@@ -3,251 +3,381 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Isochrones — Où puis-je aller en 10 minutes ?</title>
+<title>Explorateur de mobilité</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
   :root { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
   #map { height: 100%; }
-  .panel {
-    position: absolute; top: 12px; left: 12px; z-index: 1000;
-    background: rgba(255,255,255,0.95); border-radius: 14px;
-    padding: 14px 16px; box-shadow: 0 4px 18px rgba(0,0,0,0.18);
-    max-width: 300px; font-size: 14px; color: #1f2937;
+  .leaflet-container { font: inherit; }
+
+  /* ---------- Barre de recherche (haut, centre, voyante) ---------- */
+  .topbar {
+    position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+    z-index: 1000; width: min(520px, 92vw);
+    background: linear-gradient(135deg, #4f46e5, #2563eb);
+    border-radius: 16px; padding: 12px 16px;
+    box-shadow: 0 6px 24px rgba(37,99,235,0.35);
+    color: #fff;
   }
-  .panel h1 { font-size: 16px; margin: 0 0 6px; }
-  .panel p { margin: 0 0 10px; color: #6b7280; line-height: 1.35; }
-  .legend { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
-  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-  .legend-item.show-first { font-weight: 600; }
-  .swatch { width: 18px; height: 13px; border-radius: 3px; flex: none; }
-  .swatch.walk { background: rgba(34,197,94,0.55); border: 2px solid #16a34a; }
-  .swatch.bike { background: rgba(59,130,246,0.55); border: 2px solid #2563eb; }
-  .swatch.car { background: rgba(239,68,68,0.55); border: 2px solid #dc2626; }
-  .row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
-  .row label { font-size: 13px; color: #374151; }
-  select, input[type=range] { accent-color: #2563eb; }
-  #status { margin-top: 10px; font-size: 12.5px; color: #6b7280; min-height: 16px; }
-  #status.error { color: #b91c1c; }
+  .topbar h1 { font-size: 15px; margin: 0 0 8px; letter-spacing: .2px; }
+  .search-row { display: flex; gap: 8px; }
+  #search-box {
+    flex: 1; padding: 10px 12px; border: 0; border-radius: 10px;
+    font-size: 14px; outline: none; background: #fff; color: #111827;
+  }
+  #search-btn {
+    padding: 0 16px; border: 0; border-radius: 10px; font-size: 16px;
+    background: #fbbf24; cursor: pointer; transition: transform .1s;
+  }
+  #search-btn:hover { transform: scale(1.06); }
+  #location-line {
+    margin-top: 8px; font-size: 12.5px; line-height: 1.4; min-height: 17px;
+    color: #e0e7ff; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  }
+  #location-line b { color: #fff; }
+  .slider-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .slider-row label { font-size: 12.5px; white-space: nowrap; }
+  #minutes-val {
+    background: #fbbf24; color: #111827; font-weight: 700; font-size: 12.5px;
+    padding: 2px 8px; border-radius: 999px; min-width: 52px; text-align: center;
+  }
+  #minutes { flex: 1; accent-color: #fbbf24; }
+
+  /* ---------- Sélecteur de fond de carte (haut droite) ---------- */
+  .basemap-box {
+    position: absolute; top: 14px; right: 12px; z-index: 1000;
+    background: rgba(255,255,255,0.95); border-radius: 12px; padding: 8px 10px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.18); font-size: 12.5px; color: #1f2937;
+    display: flex; gap: 6px; align-items: center;
+  }
+  .basemap-box button {
+    border: 1px solid #d1d5db; background: #fff; border-radius: 8px;
+    padding: 4px 10px; font-size: 12px; cursor: pointer;
+  }
+  .basemap-box button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+
+  /* ---------- Outil règle (gauche, centre) ---------- */
+  #ruler-widget {
+    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+    z-index: 1000; width: 44px; height: 44px; border-radius: 12px;
+    border: 0; background: rgba(255,255,255,0.95); font-size: 20px;
+    cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,0.2);
+    transition: opacity .2s, background .2s;
+  }
+  #ruler-widget { opacity: 1; background: #fbbf24; } /* activable : jaune */
+  #ruler-widget:hover { background: #f59e0b; }
+  #ruler-widget.disabled { opacity: .35; background: #e5e7eb; cursor: not-allowed; } /* non cliquable : gris */
+  #ruler-widget.active-mode { background: #d97706; outline: 2px solid #111827; }
+
+  /* ---------- Légende (haut gauche) ---------- */
+  .legend-box {
+    position: absolute; top: 14px; left: 12px; z-index: 1000;
+    background: rgba(255,255,255,0.95); border-radius: 12px; padding: 8px 10px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.18); font-size: 11.5px; color: #1f2937;
+  }
+  .legend-box .lg-title { font-weight: 700; margin-bottom: 4px; font-size: 11.5px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+  .lg-swatch { width: 14px; height: 10px; border-radius: 3px; flex: none; border: 1.5px solid rgba(0,0,0,0.25); }
+  .legend-box .lg-note { margin-top: 5px; color: #9ca3af; font-size: 10.5px; line-height: 1.3; }
+  .legend-item[data-mode] { cursor: pointer; border-radius: 6px; }
+  .legend-item[data-mode]:hover { background: #eef2ff; }
+  .legend-item.sel { background: #e0e7ff; font-weight: 700; }
+
+  /* ---------- Panneau de tests (bas gauche, pliable) ---------- */
+  .tests-panel {
+    position: absolute; bottom: 12px; left: 12px; z-index: 1000;
+    width: 300px; max-width: calc(100vw - 24px);
+    background: rgba(255,255,255,0.97); border-radius: 14px;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.2); overflow: hidden;
+    font-size: 12.5px; color: #1f2937;
+  }
+  .tests-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; cursor: pointer; user-select: none; font-weight: 600;
+  }
+  .tests-header .chev { transition: transform .2s; font-size: 11px; color: #6b7280; }
+  .tests-header .chev.open { transform: rotate(90deg); }
+  #tests-badge { font-weight: 400; font-size: 12px; }
+  .tests-body { padding: 0 14px 12px; border-top: 1px solid #e5e7eb; }
+  .tests-body.hidden { display: none; }
+  #test-results > div { padding: 5px 0; line-height: 1.45; }
+  .ok { color: #166534; } .fail { color: #b91c1c; font-weight: 600; }
+  .info-btn {
+    margin-left: 6px; border: 0; background: #e5e7eb; border-radius: 999px;
+    width: 16px; height: 16px; font-size: 10px; cursor: pointer; vertical-align: 2px;
+  }
+  .explain {
+    display: block; margin-top: 3px; padding: 6px 8px; border-radius: 8px;
+    background: #fef2f2; color: #7f1d1d; font-size: 11.5px; font-weight: 400;
+  }
+  #rerun-tests {
+    margin-top: 8px; width: 100%; padding: 6px; border: 0; border-radius: 8px;
+    background: #2563eb; color: #fff; font-size: 12px; cursor: pointer;
+  }
   .spinner {
     display: inline-block; width: 12px; height: 12px; vertical-align: -2px;
     border: 2px solid #d1d5db; border-top-color: #2563eb; border-radius: 50%;
     animation: spin 0.8s linear infinite; margin-right: 5px;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .mode-order { font-size: 12px; color: #9ca3af; margin-top: 8px; line-height: 1.4; }
+
+  /* ---------- Responsive : tablette ---------- */
+  @media (max-width: 900px) {
+    .topbar { width: min(440px, 94vw); padding: 10px 12px; }
+    .topbar h1 { font-size: 13px; }
+    .basemap-box { top: auto; bottom: 12px; right: 12px; flex-direction: column; gap: 4px; }
+    .tests-panel { width: 260px; }
+  }
+  /* ---------- Responsive : smartphone ---------- */
+  @media (max-width: 600px) {
+    .topbar { top: 8px; width: calc(100vw - 20px); left: auto; right: 10px; transform: none; padding: 8px 10px; border-radius: 12px; }
+    .topbar h1 { font-size: 12px; margin-bottom: 5px; }
+    #search-box { padding: 8px 10px; font-size: 13px; }
+    .slider-row { flex-wrap: wrap; }
+    .basemap-box { bottom: 8px; right: 8px; padding: 6px 8px; font-size: 11px; }
+    .basemap-box button { padding: 3px 7px; font-size: 11px; }
+    .legend-box { top: auto; bottom: 8px; left: 8px; padding: 6px 8px; font-size: 10.5px; }
+    .legend-box .lg-note { display: none; }
+    .lg-swatch { width: 12px; height: 8px; }
+    .tests-panel { bottom: 60px; left: 8px; width: 220px; font-size: 11px; }
+    #ruler-widget { width: 38px; height: 38px; font-size: 17px; left: 8px; }
+  }
 </style>
 </head>
 <body>
 <div id="map"></div>
 
-<div class="panel">
-  <h1>🗺️ Où puis-je aller en 10 minutes ?</h1>
-  <p>Cliquez n'importe où sur la carte : l'appli calcule et affiche les zones atteignables à pied, à vélo et en voiture.</p>
-  <div class="row">
+<div class="topbar">
+  <h1>🧭 Explorateur de mobilité</h1>
+  <div class="search-row">
+    <input id="search-box" type="text" placeholder="🔍 Rechercher une adresse, un lieu… (ex : 24 rue de Rivoli, Paris)" />
+    <button id="search-btn" title="Rechercher">GO</button>
+  </div>
+  <div id="location-line">Clique sur la carte ou recherche une adresse pour afficher les zones atteignables.</div>
+  <div class="slider-row">
     <label for="minutes">Durée :</label>
-    <select id="minutes">
-      <option value="5">5 min</option>
-      <option value="10" selected>10 min</option>
-      <option value="15">15 min</option>
-      <option value="20">20 min</option>
-    </select>
+    <input id="minutes" type="range" min="5" max="60" step="5" value="10" />
+    <span id="minutes-val">10 min</span>
   </div>
-  <div class="legend">
-    <div class="legend-item show-first"><span class="swatch walk"></span> À pied (au-dessus)</div>
-    <div class="legend-item"><span class="swatch bike"></span> À vélo (2ᵉ couche)</div>
-    <div class="legend-item"><span class="swatch car"></span> En voiture (3ᵉ couche)</div>
+</div>
+
+<div class="legend-box">
+  <div class="lg-title">Légende</div>
+  <div class="legend-item" data-mode="walk"><span class="lg-swatch" style="background:#16a34a"></span> À pied (prioritaire)</div>
+  <div class="legend-item" data-mode="bike"><span class="lg-swatch" style="background:#2563eb"></span> À vélo (2ᵉ)</div>
+  <div class="legend-item" data-mode="car"><span class="lg-swatch" style="background:#dc2626"></span> En voiture (3ᵉ)</div>
+  <div class="lg-note">Clique sur un mode pour l'afficher seul.</div>
+</div>
+
+<div class="basemap-box">
+  Fond :
+  <button id="bm-plan" class="active">Plan</button>
+  <button id="bm-relief">Relief</button>
+</div>
+
+<button id="ruler-widget" class="disabled" title="Règle de mesure (disponible après avoir placé un point)">📏</button>
+
+<div class="tests-panel">
+  <div class="tests-header" id="tests-header">
+    <span>🧪 Diagnostic des services <span id="tests-badge"><span class="spinner"></span>en cours…</span></span>
+    <span class="chev" id="tests-chev">▶</span>
   </div>
-  <div class="mode-order">Les zones se superposent : la zone à pied est prioritaire à l'affichage, puis le vélo, puis la voiture.</div>
-  <div id="status"></div>
-  <button id="run-tests" style="margin-top:10px;width:100%;padding:8px 10px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-size:13px;cursor:pointer;">🧪 Tester les services</button>
-  <div id="test-results" style="margin-top:8px;font-size:12px;line-height:1.5;color:#374151;"></div>
+  <div class="tests-body hidden" id="tests-body">
+    <div id="test-results"></div>
+    <button id="rerun-tests">↻ Relancer les tests</button>
+  </div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
 <script>
 "use strict";
 
 // ------------------------------------------------------------------
-// Configuration des modes : couleur et paramètre "costing" Valhalla
+// Modes : à pied prioritaire, vélo 2e, voiture 3e
 // ------------------------------------------------------------------
 const MODES = [
-  { id: "car",  label: "voiture", costing: "auto",       color: "#dc2626", fill: "rgba(239,68,68,0.30)", speedKmh: 30 },
-  { id: "bike", label: "vélo",    costing: "bicycle",    color: "#2563eb", fill: "rgba(59,130,246,0.35)", speedKmh: 15 },
-  { id: "walk", label: "à pied",  costing: "pedestrian", color: "#16a34a", fill: "rgba(34,197,94,0.40)", speedKmh: 4.8 }
-];
-// Ordre d'ajout = ordre d'empilement : voiture d'abord (en dessous),
-// puis vélo, puis à pied (au-dessus). Les couches se superposent.
-
-// ------------------------------------------------------------------
-// Carte Leaflet
-// ------------------------------------------------------------------
-const map = L.map("map", { zoomControl: true }).setView([48.8566, 2.3522], 13);
-// Fond de carte : ESRI (sans clé, accès libre), puis OSM Allemagne en secours.
-// Carto et OSM France retirés : ils peuvent exiger une clé API.
-const BASEMAPS = [
-  { url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
-    attribution: "Tuiles &copy; Esri &mdash; Sources : Esri, HERE, Garmin, OpenStreetMap" },
-  { url: "https://{s}.tile.openstreetmap.de/{z}/{x}/{y}.png",
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' },
-  { url: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>' }
+  { id: "car",  costing: "auto",       color: "#dc2626", fillOpacity: 0.45 },
+  { id: "bike", costing: "bicycle",    color: "#2563eb", fillOpacity: 0.45 },
+  { id: "walk", costing: "pedestrian", color: "#16a34a", fillOpacity: 0.45 }
 ];
 
-let baseLayer = null;
-let baseIdx = 0;
-function setBasemap(idx) {
-  if (baseLayer) map.removeLayer(baseLayer);
-  const b = BASEMAPS[idx % BASEMAPS.length];
-  baseLayer = L.tileLayer(b.url, { maxZoom: 19, attribution: b.attribution });
-  baseLayer.addTo(map);
-}
-setBasemap(baseIdx);
-
-// ------------------------------------------------------------------
-// TESTS INTÉGRÉS 🧪
-// Vérifie chaque dépendance externe directement depuis le navigateur,
-// puis choisit automatiquement le premier fournisseur qui fonctionne.
-// ------------------------------------------------------------------
-
-// Test 1 : un fournisseur de fond de carte répond-il ?
-// On charge une vraie tuile (image) et on attend le résultat.
-function testTile(provider) {
-  return new Promise(function (resolve) {
-    // Tuile réelle de Paris (zoom 13) : x=3309, y=2237
-    const url = provider.url
-      .replace("{s}", "a")
-      .replace("{z}", "13").replace("{x}", "3309")
-      .replace("{y}", "2237").replace("{r}", "");
-    const img = new Image();
-    const timeout = setTimeout(function () { resolve(false); }, 8000);
-    img.onload = function () { clearTimeout(timeout); resolve(true); };
-    img.onerror = function () { clearTimeout(timeout); resolve(false); };
-    img.src = url;
-  });
-}
-
-// Test 2 : l'API d'isochrones répond-elle pour ce mode ?
-async function testValhalla(costing) {
-  const body = {
-    locations: [{ lat: 48.8566, lon: 2.3522, type: "break" }],
-    costing: costing,
-    contours: [{ time: 10 }],
-    polygons: true
-  };
-  for (const host of VALHALLA_HOSTS) {
-    try {
-      const res = await fetch(host + "/isochrone?json=" + encodeURIComponent(JSON.stringify(body)));
-      if (!res.ok) continue;
-      const data = await res.json();
-      if (data.features && data.features.length) return true;
-    } catch (e) { /* serveur suivant */ }
-  }
-  return false;
-}
-
-const testResultsEl = document.getElementById("test-results");
-
-// Affiche un résultat de test sous forme ✔️ / ✖️
-function renderResult(label, ok, extra) {
-  const line = document.createElement("div");
-  line.innerHTML = (ok ? "✅ " : "✖️ ") + label + (extra ? " <span style='color:#9ca3af'>(" + extra + ")</span>" : "");
-  line.style.color = ok ? "#166534" : "#b91c1c";
-  testResultsEl.appendChild(line);
-}
-
-async function runSelfTests() {
-  testResultsEl.innerHTML = '<span class="spinner"></span>Tests en cours…';
-
-  // Test des 3 fournisseurs de fond de carte
-  const tileOk = [];
-  for (let i = 0; i < BASEMAPS.length; i++) {
-    const ok = await testTile(BASEMAPS[i]);
-    tileOk.push(ok);
-    renderResult("Fond de carte " + (i + 1) + "/" + BASEMAPS.length + " : " +
-      ["ESRI", "OSM Allemagne", "Carto"][i], ok, ok ? "image reçue" : "injoignable ou clé exigée");
-  }
-
-  // Test de l'API isochrone pour les 3 modes
-  const valhallaTests = await Promise.all([
-    testValhalla("pedestrian"), testValhalla("bicycle"), testValhalla("auto")
-  ]);
-  const modeNames = ["à pied", "à vélo", "en voiture"];
-  valhallaTests.forEach(function (ok, i) {
-    renderResult("Zone " + modeNames[i] + " : API Valhalla", ok, ok ? "polygone reçu" : "échec");
-  });
-
-  // On active le premier fond de carte qui fonctionne
-  const firstOk = tileOk.indexOf(true);
-  if (firstOk !== -1) {
-    baseIdx = firstOk;
-    setBasemap(baseIdx);
-    renderResult("Fond de carte actif : " + (["ESRI", "OSM Allemagne", "Carto"][firstOk]) + " — choisi automatiquement", true);
-  } else {
-    renderResult("Aucun fond de carte accessible — vérifie ta connexion internet", false);
-  }
-}
-
-// Lancement automatique des tests 1 seconde après l'ouverture,
-// pour choisir le bon fond de carte sans action de l'utilisateur.
-setTimeout(runSelfTests, 1000);
-document.getElementById("run-tests").addEventListener("click", runSelfTests);
-
-let marker = null;
-const layers = {};   // id -> couche Leaflet
-let lastPoint = null;
-
-const statusEl = document.getElementById("status");
-function setStatus(html, isError) {
-  statusEl.innerHTML = html;
-  statusEl.className = isError ? "error" : "";
-}
-
-// ------------------------------------------------------------------
-// Appel à l'API publique Valhalla (FOSSGIS) — isochrones réels.
-// En cas d'échec : cercle approximatif calculé avec une vitesse moyenne.
-// ------------------------------------------------------------------
 const VALHALLA_HOSTS = [
   "https://valhalla1.openstreetmap.de",
   "https://valhalla.openstreetmap.de"
 ];
+
+// ------------------------------------------------------------------
+// Carte
+// ------------------------------------------------------------------
+const map = L.map("map", { zoomControl: true }).setView([48.8566, 2.3522], 13);
+const BASEMAPS = {
+  plan:   { url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+            attribution: "Tuiles &copy; Esri — Sources : Esri, HERE, Garmin, OpenStreetMap" },
+  relief: { url: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, SRTM | Style : <a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)' }
+};
+let currentBasemap = "plan";
+let baseLayer = null;
+function setBasemap(key) {
+  if (baseLayer) map.removeLayer(baseLayer);
+  const b = BASEMAPS[key];
+  baseLayer = L.tileLayer(b.url, { maxZoom: 17, attribution: b.attribution }).addTo(map);
+  document.getElementById("bm-plan").classList.toggle("active", key === "plan");
+  document.getElementById("bm-relief").classList.toggle("active", key === "relief");
+}
+document.getElementById("bm-plan").addEventListener("click", function () { setBasemap("plan"); });
+document.getElementById("bm-relief").addEventListener("click", function () { setBasemap("relief"); });
+setBasemap(currentBasemap);
+
+let marker = null;
+const layers = {};
+let lastPoint = null;
+
+const locLine = document.getElementById("location-line");
+function setLoc(html) { locLine.innerHTML = html; }
+
+function fmtCoord(lat, lon) {
+  return lat.toFixed(5) + ", " + lon.toFixed(5);
+}
+
+// ------------------------------------------------------------------
+// Géocodage (recherche) et géocodage inversé (adresse d'un point)
+// Deux fournisseurs : Nominatim (OSM) puis Photon (Komoot) en secours.
+// Ces services gratuits limitent le débit (~1 requête/seconde) : on n'en
+// envoie jamais plusieurs à la fois.
+// ------------------------------------------------------------------
+async function geocodeNominatim(query) {
+  const url = "https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" + encodeURIComponent(query);
+  const res = await fetch(url, { headers: { "Accept-Language": "fr" } });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  const list = await res.json();
+  if (!list.length) return null;
+  return { lat: parseFloat(list[0].lat), lon: parseFloat(list[0].lon), label: list[0].display_name };
+}
+
+async function geocodePhoton(query) {
+  const url = "https://photon.komoot.io/api/?limit=1&lang=fr&q=" + encodeURIComponent(query);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  const data = await res.json();
+  if (!data.features || !data.features.length) return null;
+  const f = data.features[0];
+  return { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0],
+           label: f.properties && f.properties.name ? f.properties.name : "Lieu trouvé" };
+}
+
+async function geocode(query) {
+  try {
+    const r = await geocodeNominatim(query);
+    if (r) return r;
+  } catch (e) { /* on essaie Photon */ }
+  try { return await geocodePhoton(query); } catch (e) { return null; }
+}
+
+async function reverseGeocode(lat, lon) {
+  // Nominatim d'abord, Photon en secours
+  try {
+    const url = "https://nominatim.openstreetmap.org/reverse?format=json&zoom=17&lat=" + lat + "&lon=" + lon;
+    const res = await fetch(url, { headers: { "Accept-Language": "fr" } });
+    if (res.ok) {
+      const d = await res.json();
+      if (d && d.display_name) return d.display_name;
+    }
+  } catch (e) { /* secours */ }
+  try {
+    const url = "https://photon.komoot.io/reverse?limit=1&lang=fr&lat=" + lat + "&lon=" + lon;
+    const res = await fetch(url);
+    if (res.ok) {
+      const d = await res.json();
+      if (d.features && d.features.length) {
+        const p = d.features[0].properties || {};
+        return p.name || p.city || p.state || null;
+      }
+    }
+  } catch (e) { /* pas d'adresse */ }
+  return null;
+}
+
+function showLocWithAddress(lat, lon, statusHtml, preLabel) {
+  setLoc((statusHtml ? statusHtml + " " : "") +
+    "📍 <b>" + fmtCoord(lat, lon) + "</b>" +
+    (preLabel ? " — " + preLabel : " — recherche de l'adresse…"));
+  if (preLabel) return; // adresse déjà connue (recherche) : pas de géocodage inversé
+  reverseGeocode(lat, lon).then(function (addr) {
+    setLoc((statusHtml ? statusHtml + " " : "") + "📍 <b>" + fmtCoord(lat, lon) + "</b>"
+      + (addr ? " — " + addr : " (adresse non trouvée)"));
+  });
+}
+
+// ------------------------------------------------------------------
+// Isochrones
+// ------------------------------------------------------------------
+function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+// Toutes les combinaisons à essayer, dans l'ordre. La méthode POST sur
+// valhalla.openstreetmap.de est connue pour fonctionner dans les navigateurs
+// (CORS autorisé) : elle est volontairement en bonne place dans la liste.
+const VALHALLA_ATTEMPTS = [
+  { host: "https://valhalla.openstreetmap.de", method: "POST" },
+  { host: "https://valhalla.openstreetmap.de", method: "GET" },
+  { host: "https://valhalla1.openstreetmap.de", method: "GET" },
+  { host: "https://valhalla1.openstreetmap.de", method: "POST" }
+];
+
+async function valhallaRequest(att, body) {
+  if (att.method === "POST") {
+    const res = await fetch(att.host + "/isochrone", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) return null;
+    return res.json();
+  }
+  const res = await fetch(att.host + "/isochrone?json=" + encodeURIComponent(JSON.stringify(body)));
+  if (!res.ok) return null;
+  return res.json();
+}
 
 async function fetchIsochrone(lat, lon, mode, minutes) {
   const body = {
     locations: [{ lat: lat, lon: lon, type: "break" }],
     costing: mode.costing,
     contours: [{ time: minutes }],
-    polygons: true,
-    generalize: 60,
-    denoise: 0.4
+    polygons: true, generalize: 60, denoise: 0.4
   };
-  // On essaie chaque serveur, en GET (plus compatible navigateur que POST).
-  for (const host of VALHALLA_HOSTS) {
+  for (const att of VALHALLA_ATTEMPTS) {
     try {
-      const res = await fetch(host + "/isochrone?json=" + encodeURIComponent(JSON.stringify(body)));
-      if (!res.ok) continue;
-      const data = await res.json();
-      if (data.features && data.features.length) {
-        return { type: "FeatureCollection", features: data.features, approx: false };
-      }
-    } catch (e) { /* on essaie le serveur suivant */ }
+      const data = await valhallaRequest(att, body);
+      if (data && data.features && data.features.length) return data;
+    } catch (e) { /* CORS, réseau, etc. : combinaison suivante */ }
+    await wait(400); // petit délai de politesse entre les essais
   }
-  // Aucun serveur n'a répondu : cercle approximatif (vitesse moyenne du mode)
-  const radiusKm = (mode.speedKmh * minutes) / 60;
-  return { circleKm: radiusKm, approx: true };
+  return null; // échec réel : pas de polygone
 }
 
-// Cercle approximatif en secours (dessine un cercle en mètres)
-function fallbackCircle(lat, lon, radiusKm, mode) {
-  return L.circle([lat, lon], {
-    radius: radiusKm * 1000,
-    color: mode.color,
-    weight: 2,
-    fillColor: mode.color,
-    fillOpacity: 0.25,
-    dashArray: "6 6"
-  });
+// Soustrait une collection de polygones d'une autre (Turf.js).
+// Sert à ne pas superposer les couleurs : vélo = vélo - pied,
+// voiture = voiture - pied - vélo. En cas d'échec, rend la couche d'origine.
+function diffCollection(baseFc, minusFcs) {
+  if (!window.turf) return baseFc;
+  let parts = baseFc.features.slice();
+  for (const mFc of minusFcs) {
+    for (const m of mFc.features) {
+      const next = [];
+      for (const p of parts) {
+        try {
+          const d = turf.difference(p, m);
+          if (d) next.push(d);
+        } catch (e) { next.push(p); }
+      }
+      parts = next;
+    }
+  }
+  return (parts.length ? { type: "FeatureCollection", features: parts } : null);
 }
 
 function clearLayers() {
@@ -255,61 +385,357 @@ function clearLayers() {
   for (const k in layers) delete layers[k];
 }
 
-async function showIsochrones(lat, lon) {
+function styleFor(mode) {
+  // Sans Turf.js (découpage impossible), on masque les contours pour
+  // éviter de voir les couches inférieures à travers les remplissages.
+  return { color: mode.color, weight: 2.5, fillColor: mode.color,
+           fillOpacity: mode.fillOpacity, stroke: !!window.turf };
+}
+
+// Visibilité des modes (filtrage par la légende) et rendu des couches
+const visibleModes = { car: true, bike: true, walk: true };
+let modeData = null;
+function renderLayers() {
+  clearLayers();
+  const shown = Object.keys(visibleModes).filter(function (k) { return visibleModes[k]; });
+  const single = shown.length === 1; // affichage isolé → polygone entier
+  const order = ["car", "bike", "walk"]; // du dessous vers le dessus
+  order.forEach(function (id) {
+    if (visibleModes[id] && modeData && modeData[id]) {
+      const fc = single ? modeData[id].full : modeData[id].clipped;
+      if (!fc) return;
+      const mode = MODES.find(function (m) { return m.id === id; });
+      layers[id] = L.geoJSON(fc, { style: styleFor(mode) }).addTo(map);
+    }
+  });
+}
+
+// Clic sur la légende : afficher un seul mode, recliquer pour tout remettre
+document.querySelectorAll(".legend-item[data-mode]").forEach(function (item) {
+  item.addEventListener("click", function () {
+    const id = item.dataset.mode;
+    const shown = Object.keys(visibleModes).filter(function (k) { return visibleModes[k]; });
+    if (shown.length === 1 && shown[0] === id) {
+      // déjà seul affiché → on remontre tout
+      Object.keys(visibleModes).forEach(function (k) { visibleModes[k] = true; });
+      item.classList.remove("sel");
+    } else {
+      Object.keys(visibleModes).forEach(function (k) { visibleModes[k] = (k === id); });
+      document.querySelectorAll(".legend-item[data-mode]").forEach(function (i) { i.classList.remove("sel"); });
+      item.classList.add("sel");
+    }
+    if (modeData) renderLayers();
+  });
+});
+
+let busy = false; // cooldown : une seule recherche à la fois
+
+async function showIsochrones(lat, lon, opts) {
+  opts = opts || {};
+  if (busy) return; // calcul déjà en cours : on ignore les nouveaux clics
+  busy = true;
   const minutes = parseInt(document.getElementById("minutes").value, 10);
   clearLayers();
 
   if (marker) map.removeLayer(marker);
-  marker = L.marker([lat, lon]).addTo(map)
-    .bindPopup("Point choisi<br>" + lat.toFixed(5) + ", " + lon.toFixed(5)).openPopup();
+  marker = L.marker([lat, lon]).addTo(map);
+  lastPoint = { lat: lat, lng: lon };
+  updateRulerAvailability();
 
-  setStatus('<span class="spinner"></span>Calcul des zones en cours…');
+  showLocWithAddress(lat, lon, '<span class="spinner"></span>Calcul des zones…', opts.label);
   const t0 = Date.now();
 
-  // Les 3 requêtes partent en parallèle
-  const results = await Promise.all(
-    MODES.map(function (m) { return fetchIsochrone(lat, lon, m, minutes); })
-  );
-
-  let anyApprox = false;
-  MODES.forEach(function (mode, i) {
-    const r = results[i];
-    let layer;
-    if (r.type === "FeatureCollection") {
-      layer = L.geoJSON(r, {
-        style: { color: mode.color, weight: 2.5, fillColor: mode.color, fillOpacity: 0.30 }
-      });
-    } else {
-      anyApprox = true;
-      layer = fallbackCircle(lat, lon, r.circleKm, mode);
-    }
-    layers[mode.id] = layer.addTo(map); // voiture ajoutée 1re => dessous
-  });
-
-  const okCount = results.filter(function (r) { return !r.approx; }).length;
-  const secs = ((Date.now() - t0) / 1000).toFixed(1);
-  if (anyApprox) {
-    setStatus('⚠️ ' + okCount + '/3 zones réelles. Les zones en pointillés sont des <b>estimations</b> (le service de routage était injoignable).', okCount === 0);
-  } else {
-    setStatus('✅ 3 zones calculées en ' + secs + ' s — cliquez ailleurs pour recalculer.');
+  // Calculs séquentiels (pas de rafale : le service gratuit limite le débit)
+  const results = [];
+  for (const m of MODES) {
+    results.push(await fetchIsochrone(lat, lon, m, minutes));
+    await wait(250); // petit délai de politesse entre chaque mode
   }
 
-  // Zoome sur l'ensemble des zones
+  const anyFail = results.some(function (r) { return r === null; });
+  // Zones écrêtées pour éviter le mélange de couleurs (priorité pied > vélo > voiture)
+  const walkFc = results[2], bikeRaw = results[1], carRaw = results[0];
+  let bikeFc = bikeRaw, carFc = carRaw;
+  if (walkFc && bikeRaw) {
+    const d = diffCollection(bikeRaw, [walkFc]);
+    if (d) bikeFc = d;
+  }
+  if (walkFc && bikeRaw && carRaw) {
+    const d = diffCollection(carRaw, [walkFc, bikeFc]);
+    if (d) carFc = d;
+  } else if ((walkFc || bikeFc) && carRaw) {
+    const d = diffCollection(carRaw, [walkFc || bikeFc]);
+    if (d) carFc = d;
+  }
+
+  // Dessin selon la visibilité choisie dans la légende.
+  // Superposition de plusieurs couches → zones écrêtées (pas de mélange).
+  // Une seule couche affichée → polygone ENTIER (l'écrêtage n'a plus de sens).
+  modeData = {
+    car:  { full: carRaw,  clipped: carFc },
+    bike: { full: bikeRaw, clipped: bikeFc },
+    walk: { full: walkFc,  clipped: walkFc }
+  };
+  renderLayers();
+  busy = false; // fin du cooldown : les clics sont de nouveau autorisés
+
+  const secs = ((Date.now() - t0) / 1000).toFixed(1);
+  const status = anyFail
+    ? "⚠️ Certaines zones n'ont pas pu être calculées."
+    : "✅ Zones calculées en " + secs + " s.";
+  showLocWithAddress(lat, lon, status, opts.label);
+
+  // Zoom sur l'ensemble des zones
+  const rawFc = { type: "FeatureCollection", features: [] };
+  results.forEach(function (r) { if (r) rawFc.features = rawFc.features.concat(r.features); });
   try {
-    const group = [];
-    Object.values(layers).forEach(function (l) { group.push(l); });
-    if (group.length) map.fitBounds(L.featureGroup(group).getBounds().pad(0.15));
-  } catch (e) { /* pas de frontières disponibles */ }
+    if (rawFc.features.length) map.fitBounds(L.geoJSON(rawFc).getBounds().pad(0.15));
+  } catch (e) { /* pas de frontières */ }
 }
 
+// ------------------------------------------------------------------
+// Recherche par adresse
+// ------------------------------------------------------------------
+async function searchAndGo() {
+  if (busy) return; // calcul en cours : recherche ignorée (cooldown)
+  const q = document.getElementById("search-box").value.trim();
+  if (!q) return;
+  setLoc('<span class="spinner"></span>Recherche de « ' + q + ' »…');
+  const place = await geocode(q);
+  if (!place) {
+    setLoc("❌ Adresse introuvable — essaie avec plus de détails (ville incluse).");
+    return;
+  }
+  showIsochrones(place.lat, place.lon, { label: place.label });
+}
+document.getElementById("search-btn").addEventListener("click", searchAndGo);
+document.getElementById("search-box").addEventListener("keydown", function (e) {
+  if (e.key === "Enter") searchAndGo();
+});
+
+// ------------------------------------------------------------------
+// Outil règle (mesure de distance)
+// États : off -> active (segment suit la souris) -> frozen (segment figé,
+// le widget devient ✕ pour tout supprimer)
+// ------------------------------------------------------------------
+const rulerWidget = document.getElementById("ruler-widget");
+let rulerState = "off";
+let rulerLine = null;   // polyligne pointillée
+let rulerLabel = null;   // étiquette de distance au milieu du segment
+
+function updateRulerAvailability() {
+  const hasPoint = !!lastPoint;
+  if (rulerState === "off") {
+    rulerWidget.classList.toggle("disabled", !hasPoint);
+    rulerWidget.textContent = "📏";
+    rulerWidget.classList.remove("active-mode");
+    rulerWidget.title = hasPoint ? "Mesurer une distance depuis le point"
+                                 : "Place d'abord un point sur la carte";
+  }
+}
+
+function haversine(a, b) {
+  const R = 6371000, r = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * r, dLon = (b.lng - a.lng) * r;
+  const x = Math.sin(dLat / 2) ** 2 +
+    Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+function fmtDist(m) { return m < 1000 ? Math.round(m) + " m" : (m / 1000).toFixed(2) + " km"; }
+
+function drawRulerTo(mouse) {
+  const p = lastPoint;
+  if (!p) return;
+  const pts = [[p.lat, p.lng], [mouse.lat, mouse.lng]];
+  const d = fmtDist(haversine(p, mouse));
+  const mid = L.latLng((p.lat + mouse.lat) / 2, (p.lng + mouse.lng) / 2);
+  if (!rulerLine) {
+    rulerLine = L.polyline(pts, { color: "#111827", weight: 2, dashArray: "6 8" }).addTo(map);
+    rulerLabel = L.marker(mid, {
+      interactive: false,
+      icon: L.divIcon({ className: "", html:
+        '<span style="background:#111827;color:#fff;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap;">' + d + '</span>',
+        iconSize: null })
+    }).addTo(map);
+  } else {
+    rulerLine.setLatLngs(pts);
+    rulerLabel.setLatLng(mid);
+    rulerLabel.setIcon(L.divIcon({ className: "", html:
+      '<span style="background:#111827;color:#fff;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap;">' + d + '</span>',
+      iconSize: null }));
+  }
+}
+
+function clearRuler() {
+  if (rulerLine) { map.removeLayer(rulerLine); rulerLine = null; }
+  if (rulerLabel) { map.removeLayer(rulerLabel); rulerLabel = null; }
+}
+
+rulerWidget.addEventListener("click", function () {
+  if (rulerState === "frozen") {
+    // Mode suppression : on retire la mesure et on restaure l'encart bleu
+    clearRuler();
+    rulerState = "off";
+    updateRulerAvailability();
+    if (lastPoint) {
+      showLocWithAddress(lastPoint.lat, lastPoint.lng, "✅ Mesure supprimée.");
+    } else {
+      setLoc("Clique sur la carte ou recherche une adresse pour afficher les zones atteignables.");
+    }
+    return;
+  }
+  if (!lastPoint) return; // indisponible sans point
+  if (rulerState === "off") {
+    rulerState = "active";
+    rulerWidget.textContent = "📏";
+    rulerWidget.classList.add("active-mode");
+    rulerWidget.title = "Clique sur la carte pour figer la mesure";
+    setLoc("📏 Règle active : bouge la souris pour mesurer depuis le point, clique pour figer le segment.");
+  }
+});
+
+map.on("mousemove", function (e) {
+  if (rulerState === "active") drawRulerTo(e.latlng);
+});
+
+// ------------------------------------------------------------------
+// Clic sur la carte
+// ------------------------------------------------------------------
 map.on("click", function (e) {
-  lastPoint = e.latlng;
+  if (busy) return; // calcul en cours : clic ignoré (cooldown)
+  if (rulerState === "active") {
+    // On fige le segment
+    drawRulerTo(e.latlng);
+    rulerState = "frozen";
+    rulerWidget.textContent = "✕";
+    rulerWidget.classList.remove("active-mode");
+    rulerWidget.title = "Supprimer la mesure";
+    setLoc("📏 Mesure figée — clique sur ✕ pour la supprimer.");
+    return;
+  }
   showIsochrones(e.latlng.lat, e.latlng.lng);
 });
 
-document.getElementById("minutes").addEventListener("change", function () {
+// ------------------------------------------------------------------
+// Jauge de durée (5 à 60 min, paliers de 5)
+// ------------------------------------------------------------------
+const minutesEl = document.getElementById("minutes");
+const minutesVal = document.getElementById("minutes-val");
+minutesEl.addEventListener("input", function () {
+  minutesVal.textContent = minutesEl.value + " min";
+});
+minutesEl.addEventListener("change", function () {
   if (lastPoint) showIsochrones(lastPoint.lat, lastPoint.lng);
 });
+
+// ------------------------------------------------------------------
+// Panneau de tests pliable 🧪
+// ------------------------------------------------------------------
+const EXPLANATIONS = {
+  basemap: "Le serveur de fond de carte est injoignable ou exige une clé API. Bascule sur l'autre fond (« Plan » / « Relief ») ou vérifie ta connexion internet.",
+  valhalla: "Le service de calcul d'itinéraires (Valhalla) est injoignable ou bloque les requêtes venant du navigateur. Les zones ne peuvent pas être calculées : réessaie plus tard.",
+  nominatim: "Le service de recherche d'adresses (Nominatim, OpenStreetMap) est injoignable ou limite temporairement les requêtes. La recherche d'adresse ne fonctionnera pas — le clic sur la carte, lui, marche toujours.",
+  turf: "La bibliothèque de découpage géométrique (Turf.js) n'a pas pu être chargée depuis internet. Les zones se superposeront avec un mélange de couleurs au lieu d'être écrêtées. Vérifie ta connexion et recharge la page."
+};
+
+const testResultsEl = document.getElementById("test-results");
+const testsBody = document.getElementById("tests-body");
+const testsChev = document.getElementById("tests-chev");
+const testsBadge = document.getElementById("tests-badge");
+let testsOpen = false;
+
+function setTestsOpen(open) {
+  testsOpen = open;
+  testsBody.classList.toggle("hidden", !open);
+  testsChev.classList.toggle("open", open);
+}
+document.getElementById("tests-header").addEventListener("click", function () {
+  setTestsOpen(!testsOpen);
+});
+
+function addResult(ok, label, extra, explainKey) {
+  const line = document.createElement("div");
+  line.className = ok ? "ok" : "fail";
+  let html = (ok ? "✅ " : "✖️ ") + label +
+    (extra ? ' <span style="color:#9ca3af;font-weight:400">(' + extra + ")</span>" : "");
+  if (!ok) {
+    html += ' <button class="info-btn" data-key="' + explainKey + '" title="Explication">i</button>';
+  }
+  line.innerHTML = html;
+  if (!ok) {
+    const btn = line.querySelector(".info-btn");
+    btn.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      let ex = line.querySelector(".explain");
+      if (ex) { ex.remove(); return; }
+      ex = document.createElement("span");
+      ex.className = "explain";
+      ex.textContent = EXPLANATIONS[btn.dataset.key] || "";
+      line.appendChild(ex);
+    });
+  }
+  testResultsEl.appendChild(line);
+}
+
+function testTile(provider) {
+  return new Promise(function (resolve) {
+    const url = provider.url.replace("{s}", "a")
+      .replace("{z}", "13").replace("{x}", "3309").replace("{y}", "2237");
+    const img = new Image();
+    const t = setTimeout(function () { resolve(false); }, 8000);
+    img.onload = function () { clearTimeout(t); resolve(true); };
+    img.onerror = function () { clearTimeout(t); resolve(false); };
+    img.src = url;
+  });
+}
+
+async function testValhalla(costing) {
+  const body = {
+    locations: [{ lat: 48.8566, lon: 2.3522, type: "break" }],
+    costing: costing, contours: [{ time: 10 }], polygons: true
+  };
+  for (const att of VALHALLA_ATTEMPTS) {
+    try {
+      const data = await valhallaRequest(att, body);
+      if (data && data.features && data.features.length) return true;
+    } catch (e) { /* combinaison suivante */ }
+  }
+  return false;
+}
+
+async function runSelfTests() {
+  testResultsEl.innerHTML = "";
+  testsBadge.innerHTML = '<span class="spinner"></span>en cours…';
+
+  const tilePlan = await testTile(BASEMAPS.plan);
+  addResult(tilePlan, "Fond de carte « Plan » (Esri)", tilePlan ? "image reçue" : "injoignable", "basemap");
+  const tileRelief = await testTile(BASEMAPS.relief);
+  addResult(tileRelief, "Fond de carte « Relief » (OpenTopoMap)", tileRelief ? "image reçue" : "injoignable", "basemap");
+
+  // Une SEULE requête Valhalla suffit : le même serveur calcule les 3 modes.
+  // (3 requêtes simultanées = risque de limite de débit sur ce service gratuit)
+  const valhallaOk = await testValhalla("pedestrian");
+  addResult(valhallaOk, "Calcul des zones (Valhalla)", valhallaOk ? "polygone reçu" : "échec", "valhalla");
+
+  const turfOk = typeof turf !== "undefined";
+  addResult(turfOk, "Découpage des zones (Turf.js)", turfOk ? "bibliothèque chargée" : "non chargée", "turf");
+
+  const geoOk = (await geocode("24 rue de Rivoli, Paris")) !== null;
+  addResult(geoOk, "Recherche d'adresse (Nominatim/Photon)", geoOk ? "adresse localisée" : "injoignable", "nominatim");
+
+  const allTests = [tilePlan, tileRelief, valhallaOk, turfOk, geoOk];
+  const allOk = allTests.every(function (x) { return x; });
+  if (allOk) {
+    testsBadge.innerHTML = "✔ tous les services opérationnels";
+    setTestsOpen(false); // plié si tout est vert
+  } else {
+    const fails = allTests.filter(function (x) { return !x; }).length;
+    testsBadge.innerHTML = "⚠ " + fails + " test(s) en échec";
+    setTestsOpen(true);  // ouvert s'il y a des échecs
+  }
+}
+document.getElementById("rerun-tests").addEventListener("click", runSelfTests);
+setTimeout(runSelfTests, 1000);
 </script>
 </body>
 </html>
